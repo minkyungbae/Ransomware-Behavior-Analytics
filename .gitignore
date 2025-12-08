@@ -3,3 +3,6 @@ venv
 
 # 명령어 저장 txt 파일
 command.txt
+
+# django secret key
+config.py
