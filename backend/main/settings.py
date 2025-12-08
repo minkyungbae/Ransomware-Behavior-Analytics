@@ -38,6 +38,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    # ransomware 모델 기능을 담은 앱
+    "ransomware",
 ]
 
 MIDDLEWARE = [
