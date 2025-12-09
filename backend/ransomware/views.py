@@ -1,10 +1,18 @@
 import json
 import pandas as pd
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+from django.shortcuts import render
 
-from backend.ML.TrainML import run_training
+from ML.TrainML import run_training
+
+
+def mainpage(request):
+    """
+    mainpage.html 렌더링
+    """
+    return render(request, "mainpage.html")
 
 
 # ============================================================
@@ -27,7 +35,62 @@ def get_classes(request):
 
 
 # ============================================================
-# 2) 모델 훈련 API
+# 2. StreamingResponse로 훈련 과정 실시간 로그 제공
+# ============================================================
+@csrf_exempt
+def train_stream(request):
+    """
+    실시간 학습 로그 스트리밍.
+    프런트엔드 JS EventSource(SSE)로 수신 가능.
+    """
+
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    try:
+        body = json.loads(request.body)
+        class_id = body.get("class_id", None)
+    except:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    if class_id is None:
+        return JsonResponse({"error": "class_id is required"}, status=400)
+
+    dataset_path = settings.BASE_DIR / "dataset.csv"
+
+    def generate():
+        """
+        스트리밍 방식으로 로그 전송
+        """
+        yield "data: 학습 시작...\n\n"
+
+        try:
+            results = run_training(
+                class_id=class_id,
+                dataset_path=str(dataset_path),
+                stream_callback=lambda msg: f"data: {msg}\n\n"
+            )
+
+            # 최종 결과 JSON 통째로 반환
+            final_json = json.dumps({
+                "status": "done",
+                "class_id": class_id,
+                "results": results
+            })
+
+            yield f"data: {final_json}\n\n"
+
+        except Exception as e:
+            yield f"data: ERROR: {str(e)}\n\n"
+
+    return StreamingHttpResponse(
+        generate(),
+        content_type="text/event-stream"
+    )
+
+
+# ============================================================
+# 3. 모델 훈련 API
 # ============================================================
 @csrf_exempt
 def train_models(request):
