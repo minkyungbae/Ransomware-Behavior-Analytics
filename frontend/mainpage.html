@@ -49,7 +49,7 @@
 
     <h1>Ransomware Behavior Analytics</h1>
 
-    <!-- Class 선택 -->
+    <!-- Class가 아니라 sample 선택으로 수정 필요(민경) - start -->
     <div class="card">
         <h1>Autoencoder Model</h1>
         <h2>1. 분석할 Class 선택(여러 개 선택 가능)</h2>
@@ -67,6 +67,14 @@
 
         <p id="status"></p>
     </div>
+    <!-- sample 선택 (민경) - end -->
+
+
+    <!-- Sample들의 Threshold 그래프 표시하기(승운) -start -->
+
+
+    <!-- Sample들의 Threshold 그래프 표시하기(승운) -end -->
+
 
     <!-- Autoencoder 결과 -->
     <div id="ae_section" class="card" style="display:none;">
@@ -80,6 +88,13 @@
         </div>
     </div>
 
+
+    <!-- class 분류 그래프 표시하기(승희) -start  -->
+
+
+    <!-- class 분류 그래프 표시하기(승희) -end  -->
+
+
     <!-- LSTM 결과 -->
     <div id="lstm_section" class="card" style="display:none;">
         <h2>LSTM 모델 결과</h2>
@@ -92,6 +107,7 @@
         </div>
         </div>
     </div>
+
 
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
