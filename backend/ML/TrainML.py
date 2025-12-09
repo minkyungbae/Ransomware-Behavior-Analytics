@@ -5,7 +5,7 @@
 [포함된 기능 목록]
 1. Autoencoder + LSTM 두 모델 모두 포함
 2. 훈련 결과(loss/acc 그래프 데이터) JSON 형태로 반환
-3. class_id 필터링 가능
+3. sample_id 필터링 가능
 4. Django View에서 import 후 바로 호출 가
 '''
 
@@ -22,19 +22,23 @@ from sklearn.preprocessing import MinMaxScaler
 # ==========================
 # 데이터 로드
 # ==========================
-def load_dataset(class_ids=None, path="backend/ML/dataset.csv"):
+def load_dataset(sample_ids=None, path="backend/ML/dataset.csv"):
     df = pd.read_csv(path)
 
-    if "class_id" not in df.columns:
-        raise KeyError("'class_id' 컬럼이 backend/ML/dataset.csv 안에 없습니다.")
+    # sample_ids가 유효한 리스트인지 확인
+    if sample_ids and isinstance(sample_ids, list) and len(sample_ids) > 0:
+        # sample_ids를 문자열 리스트로 변환
+        sample_ids_str = [str(sid) for sid in sample_ids if sid is not None]
 
-    if class_ids is not None and len(class_ids) >0:
-        df = df[df["class_id"].isin(class_ids)] # 다중 필터링(.init)
+        if "sample_id" not in df.columns:
+            raise KeyError("'sample_id' 컬럼이 backend/ML/dataset.csv 안에 없습니다.")
+
+        df = df[df["sample_id"].isin(sample_ids)] # 다중 필터링(.init)
 
         if len(df) == 0:
-            raise ValueError(f"class_id={class_ids} 에 해당하는 데이터가 없습니다.")
+            raise ValueError(f"sample_id={sample_ids} 에 해당하는 데이터가 없습니다.")
 
-    y = df["class_id"]
+    y = df["sample_id"]
     X = df.drop(columns=["class_id", "sample_id", "class_name"])
 
     return X, y
@@ -72,7 +76,7 @@ def build_lstm(input_shape):
     return model
 
 
-def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_callback=None):
+def run_training(sample_ids=None, dataset_path="backend/ML/dataset.csv", stream_callback=None):
     """
     Django View에서 호출되는 전체 training pipeline
     """
@@ -84,8 +88,8 @@ def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_c
     # -------------------------------
     # Step1: 데이터 로드
     # -------------------------------
-    log(f"{class_ids} 데이터 로드 중...")
-    X, y = load_dataset(class_ids, dataset_path)
+    log(f"{sample_ids} 데이터 로드 중...")
+    X, y = load_dataset(sample_ids, dataset_path)
     log(f"데이터 로드 완료 — 샘플 수: {len(X)}, feature: {X.shape[1]}")
 
     scaler = MinMaxScaler()

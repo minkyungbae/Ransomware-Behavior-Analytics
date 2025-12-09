@@ -47,12 +47,13 @@
 </head>
 <body>
 
-    <h1>Ransomware Behavior Analytics</h1>
+    <h1>Ransomware Behavior Analytics 🔍</h1>
 
-    <!-- Class가 아니라 sample 선택으로 수정 필요(민경) - start -->
+    <!-- sample 선택(민경) - start -->
     <div class="card">
-        <h1>Autoencoder Model</h1>
-        <h2>1. 분석할 Class 선택(여러 개 선택 가능)</h2>
+        <h1>Autoencoder Model 🤖</h1>
+        <h2>Choose for samples of Ransomware Behavior Analytics</h2>
+        ⭕ Multiple selection possible⭕
         <div id="checkbox_container" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;">
 
         </div>
@@ -114,31 +115,31 @@
 
     <script>
         // ===================================================
-        // 1) 서버에서 class_id 목록 가져오기 및 체크 박스 생성
+        // 1) 서버에서 sample_id 목록 가져오기 및 체크 박스 생성
         // ===================================================
-        async function loadClasses() {
-            const res = await fetch("/classes/");
+        async function loadSamples() {
+            const res = await fetch("/samples/");
             const data = await res.json();
 
             const container = document.getElementById("checkbox_container");
 
-            data.class_ids.forEach(id => {
+            data.sample_ids.forEach(id => {
                 const label = document.createElement("label");
                 label.style.display = "block";
 
                 const checkbox = document.createElement("input");
                 checkbox.type = "checkbox";
                 checkbox.value = id;
-                checkbox.name = "class_id_checkbox";
+                checkbox.name = "sample_id_checkbox";
                 checkbox.style.marginRight = "5px";
 
                 label.appendChild(checkbox);
-                label.appendChild(document.createTextNode("Class " + id));
+                label.appendChild(document.createTextNode(id));
                 container.appendChild(label);
             });
         }
 
-        loadClasses();
+        loadSamples();
 
         // ===================================================
         // 2) 모델 훈련 요청
@@ -150,9 +151,12 @@
 
         
             // 선택값 검증
-            const selectedValues = Array.from(checkboxes).map(cb => Number(cb.value));
+            const selectedValues = Array.from(checkboxes)
+            .filter(cb => cb.checked)
+            .map(ch => cb.value); // 문자열 그대로 사용('sample_00000')
+
             if (selectedValues.length === 0) {
-                alert("최소 하나의 Class를 선택해주세요.")
+                alert("훈련할 샘플을 하나 이상 선택해주세요.")
                 return;
             }
             
@@ -169,7 +173,7 @@
             const response = await fetch("/train/", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ class_ids: selectedValues })
+                body: JSON.stringify({ sample_ids: selectedValues })
             });
 
 
