@@ -134,7 +134,7 @@
                 checkbox.style.marginRight = "5px";
 
                 label.appendChild(checkbox);
-                label.appendChild(document.createTextNode("Class " + id));
+                label.appendChild(document.createTextNode(id));
                 container.appendChild(label);
             });
         }
@@ -151,9 +151,12 @@
 
         
             // 선택값 검증
-            const selectedValues = Array.from(checkboxes).map(cb => Number(cb.value));
+            const selectedValues = Array.from(checkboxes)
+            .filter(cb => cb.checked)
+            .map(ch => cb.value); // 문자열 그대로 사용('sample_00000')
+
             if (selectedValues.length === 0) {
-                alert("최소 하나의 Class를 선택해주세요.")
+                alert("훈련할 샘플을 하나 이상 선택해주세요.")
                 return;
             }
             
