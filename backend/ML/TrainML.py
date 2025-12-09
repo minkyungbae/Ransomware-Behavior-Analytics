@@ -25,10 +25,14 @@ from sklearn.preprocessing import MinMaxScaler
 def load_dataset(sample_ids=None, path="backend/ML/dataset.csv"):
     df = pd.read_csv(path)
 
-    if "sample_id" not in df.columns:
-        raise KeyError("'sample_id' 컬럼이 backend/ML/dataset.csv 안에 없습니다.")
+    # sample_ids가 유효한 리스트인지 확인
+    if sample_ids and isinstance(sample_ids, list) and len(sample_ids) > 0:
+        # sample_ids를 문자열 리스트로 변환
+        sample_ids_str = [str(sid) for sid in sample_ids if sid is not None]
 
-    if sample_ids is not None and len(sample_ids) >0:
+        if "sample_id" not in df.columns:
+            raise KeyError("'sample_id' 컬럼이 backend/ML/dataset.csv 안에 없습니다.")
+
         df = df[df["sample_id"].isin(sample_ids)] # 다중 필터링(.init)
 
         if len(df) == 0:
