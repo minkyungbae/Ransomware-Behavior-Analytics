@@ -37,7 +37,7 @@
             padding: 8px;
             font-size: 16px;
             margin-right: 15px;
-            height: 100px;
+            height: 220px;
             vertical-align: top;
         }
         .chart-container {
@@ -55,7 +55,17 @@
         <h1>Autoencoder Model</h1>
         <h2>1. 분석할 Class 선택(여러 개 선택 가능)</h2>
         <select id="class_select" multiple></select>
+        <select id="class_select" multiple></select>
+        <select id="class_select" multiple></select>
         <button id="trainBtn">모델 훈련 시작</button>
+
+        <div id="progress_container" style="display:none; margin-top: 20px;">
+            <div style="width: 100%; background-color: #e0e0e0; border-radius: 8px;">
+                <div id="progress_bar" style="width: 0%; height: 24px; background-color: #4caf50; border-radius: 8px; transition: width 0.4s ease;"></div>
+            </div>
+            <p id="progress_text" style="text-align: center; margin-top: 5px; font-weight: bold; color: #555;">0%</p>
+        </div>
+
         <p id="status"></p>
     </div>
 
@@ -116,37 +126,47 @@
             const select = document.getElementById("class_select");
             const status = document.getElementById("status");
 
+        
+            // 선택값 검증
             const selectedValues = Array.from(select.selectedOptions).map(option => Number(option.value));
             if (selectedValues.length === 0) {
                 alert("최소 하나의 Class를 선택해주세요.")
                 return;
             }
             
-            
+            // UI 초기화
             status.textContent = "모델 훈련 중... 잠시만 기다려주세요.";
             document.getElementById("trainBtn").disabled = true;
 
+            // 그래프 영역 숨기기 (재훈련 시)
+            document.getElementById("ae_section").style.display = "none";
+            document.getElementById("lstm_section").style.display = "none";
+
+
+            // 스트리밍 요청
             const response = await fetch("/train/", {
                 method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ class_ids: selecetedValues })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ class_ids: selectedValues })
             });
 
-            const data = await response.json();
-            document.getElementById("trainBtn").disabled = false;
 
-            if (data.error) {
-                status.textContent = "오류 발생: " + data.error;
+            // 결과
+            const data = await response.json();
+            documnet.getElementById("trainBtn").disabled = false;
+
+            // 500 error 시, 오류 메시지 출력
+            if (response.status !==200 || data.error) {
+                status.textContent = "오류 발생: " + (data.error || "서버 응답 오류");
                 return;
             }
 
-            status.textContent = "훈련 완료! 아래 그래프를 확인하세요.";
+            status.textContent = "훈련 완료! 아래 그래프를 확인하세요."
 
-            // 그래프 표시
             renderAutoencoderCharts(data.results.autoencoder);
             renderLstmCharts(data.results.lstm);
-        };
 
+        }
 
         // ===================================================
         // 3) Autoencoder 그래프
