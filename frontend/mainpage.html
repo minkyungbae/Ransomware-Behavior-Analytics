@@ -54,9 +54,9 @@
     <div class="card">
         <h1>Autoencoder Model</h1>
         <h2>1. 분석할 Class 선택(여러 개 선택 가능)</h2>
-        <select id="class_select" multiple></select>
-        <select id="class_select" multiple></select>
-        <select id="class_select" multiple></select>
+        <div id="checkbox_container" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;">
+
+        </div>
         <button id="trainBtn">모델 훈련 시작</button>
 
         <div id="progress_container" style="display:none; margin-top: 20px;">
@@ -100,19 +100,27 @@
 
     <script>
         // ===================================================
-        // 1) 서버에서 class_id 목록 가져오기
+        // 1) 서버에서 class_id 목록 가져오기 및 체크 박스 생성
         // ===================================================
         async function loadClasses() {
             const res = await fetch("/classes/");
             const data = await res.json();
 
-            const select = document.getElementById("class_select");
+            const container = document.getElementById("checkbox_container");
 
             data.class_ids.forEach(id => {
-                const opt = document.createElement("option");
-                opt.value = id;
-                opt.textContent = "Class " + id;
-                select.appendChild(opt);
+                const label = document.createElement("label");
+                label.style.dispaly = "block";
+
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.value = id;
+                checkbox.name = "class_id_checkbox";
+                checkbox.style.marginRight = "5px";
+
+                label.appendChild(checkbox);
+                label.appendChil(document.createTextNode("Class " + id));
+                container.appendChild(label);
             });
         }
 
@@ -124,11 +132,11 @@
         document.getElementById("trainBtn").onclick = async () => {
 
             const select = document.getElementById("class_select");
-            const status = document.getElementById("status");
+            const checkboxes = document.querySelectorAll('#checkbox_container input[type="checkbox"]:checked')
 
         
             // 선택값 검증
-            const selectedValues = Array.from(select.selectedOptions).map(option => Number(option.value));
+            const selectedValues = Array.from(checkboxes).map(cb => Number(cb.value));
             if (selectedValues.length === 0) {
                 alert("최소 하나의 Class를 선택해주세요.")
                 return;
