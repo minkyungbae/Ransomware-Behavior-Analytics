@@ -153,7 +153,7 @@
 
             // 결과
             const data = await response.json();
-            documnet.getElementById("trainBtn").disabled = false;
+            document.getElementById("trainBtn").disabled = false;
 
             // 500 error 시, 오류 메시지 출력
             if (response.status !==200 || data.error) {
