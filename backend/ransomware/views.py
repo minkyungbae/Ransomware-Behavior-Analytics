@@ -20,9 +20,9 @@ def mainpage(request):
 # ============================================================
 def get_classes(request):
     """
-    dataset.csv 파일을 읽어서 class_id 목록 반환
+    backend/ML/ransomwaredataset.csv 파일을 읽어서 class_id 목록 반환
     """
-    dataset_path = settings.BASE_DIR / "dataset.csv"
+    dataset_path = settings.BASE_DIR / "backend" / "ML" / "ransomwaredataset.csv"
 
     try:
         df = pd.read_csv(dataset_path)
@@ -56,7 +56,7 @@ def train_stream(request):
     if class_id is None:
         return JsonResponse({"error": "class_id is required"}, status=400)
 
-    dataset_path = settings.BASE_DIR / "dataset.csv"
+    dataset_path = settings.BASE_DIR / "backend" / "ML"/ "ransomwaredataset.csv"
 
     def generate():
         """
@@ -97,7 +97,7 @@ def train_models(request):
     """
     POST 요청:
     {
-        "class_id": 2
+        "class_ids": [1, 3, 5]
     }
     """
     if request.method != "POST":
@@ -106,23 +106,27 @@ def train_models(request):
     # JSON 파싱
     try:
         body = json.loads(request.body)
-        class_id = body.get("class_id", None)
+        class_ids = body.get("class_ids", [])
     except:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
+    
+    # 리스트가 비어있는지 확인
+    if not class_ids or not isinstance(class_ids, list):
+        return JsonResponse({"error": "class_ids list is required"}, status=400)
 
-    # class_id 필수
-    if class_id is None:
+    # class_ids 필수
+    if class_ids is None:
         return JsonResponse({"error": "class_id is required"}, status=400)
 
-    dataset_path = settings.BASE_DIR / "dataset.csv"
+    dataset_path = settings.BASE_DIR / "backend" / "ML" / "ransomwaredataset.csv"
 
     try:
-        # → 네가 만든 ML 훈련 코드 실행
-        results = run_training(class_id=class_id, dataset_path=str(dataset_path))
+        # ML 훈련 코드 실행
+        results = run_training(class_ids=class_ids, dataset_path=str(dataset_path))
 
         return JsonResponse({
             "message": "Training completed",
-            "class_id": class_id,
+            "class_id": class_ids,
             "results": results
         })
 
