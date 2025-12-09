@@ -35,7 +35,7 @@ def load_dataset(class_ids=None, path="backend/ML/dataset.csv"):
             raise ValueError(f"class_id={class_ids} 에 해당하는 데이터가 없습니다.")
 
     y = df["class_id"]
-    X = df.drop(columns=["class_id"])
+    X = df.drop(columns=["class_id", "sample_id", "class_name"])
 
     return X, y
 
@@ -75,14 +75,11 @@ def build_lstm(input_shape):
 def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_callback=None):
     """
     Django View에서 호출되는 전체 training pipeline
-    stream_callback: StreamingResponse로 로그를 보내기 위한 optional 함수
     """
 
     # ========== 내부 로그 함수 ========== 
     def log(msg):
         print(msg)  # 서버 콘솔에도 출력
-        if stream_callback:
-            stream_callback(msg)
 
     # -------------------------------
     # Step1: 데이터 로드
@@ -109,16 +106,27 @@ def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_c
         batch_size=32,
         validation_split=0.2,
         verbose=0,
-        callbacks=[
-            tf.keras.callbacks.LambdaCallback(
-                on_epoch_end=lambda epoch, logs: log(
-                    f"[AE] Epoch {epoch+1}/20 — loss={logs['loss']:.4f}, val_loss={logs['val_loss']:.4f}"
-                )
-            )
-        ]
     )
 
     log("Autoencoder 학습 완료")
+
+    # ------------------------------------------
+    # Autoencoder 이상 탐지 임계값(Threshold) 계산
+    # ------------------------------------------
+    # 훈련 데이터 전체에 대한 재구성 예측 수행
+    ae_predictions = autoencoder.predict(X_scaled, verbose=0)
+
+    # 각 샘플별 MSE (재구성 오차) 계산
+    reconstruction_errors = np.mean(np.square(X_scaled - ae_predictions), axis=1)
+
+    # MSE의 평균 및 표준 편차 계산
+    mean_err = np.mean(reconstruction_errors)
+    std_err = np.std(reconstruction_errors)
+
+    # 임계값 설정: 평균 + 2 * 표준편차
+    THRESHOLD = mean_err + 2 * std_err
+    log(f"Autoencoder 이상 탐지 임계값: {THRESHOLD:.6f}")
+
 
     # -------------------------------
     # Step3: LSTM 입력 reshape
@@ -139,13 +147,6 @@ def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_c
         batch_size=32,
         validation_split=0.2,
         verbose=0,
-        callbacks=[
-            tf.keras.callbacks.LambdaCallback(
-                on_epoch_end=lambda epoch, logs: log(
-                    f"[LSTM] Epoch {epoch+1}/20 — loss={logs['loss']:.4f}, val_loss={logs['val_loss']:.4f}"
-                )
-            )
-        ]
     )
 
     log("LSTM 학습 완료")
@@ -161,6 +162,7 @@ def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_c
             "val_loss": history_ae.history["val_loss"],
             "accuracy": history_ae.history["accuracy"],
             "val_accuracy": history_ae.history["val_accuracy"],
+            "threshold": THRESHOLD,
         },
         "lstm": {
             "loss": history_lstm.history["loss"],
