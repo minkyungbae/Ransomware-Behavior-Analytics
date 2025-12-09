@@ -18,33 +18,32 @@ from tensorflow.keras.layers import Input, Dense, LSTM
 from tensorflow.keras.optimizers import Adam
 from sklearn.preprocessing import MinMaxScaler
 
-# ==============================
-# 1. 데이터 로드
-# ==============================
 
-def load_dataset(class_id=None, path="dataset.csv"):
-    """
-    CSV 데이터셋을 로드하고 class_id로 필터링한 뒤 반환.
-    """
+# ==========================
+# 데이터 로드
+# ==========================
+def load_dataset(class_ids=None, path="backend/ML/dataset.csv"):
     df = pd.read_csv(path)
 
-    if class_id is not None:
-        df = df[df["class_id"] == class_id]
+    if "class_id" not in df.columns:
+        raise KeyError("'class_id' 컬럼이 backend/ML/dataset.csv 안에 없습니다.")
 
-    # y 분리
+    if class_ids is not None and len(class_ids) >0:
+        df = df[df["class_id"].isin(class_ids)] # 다중 필터링(.init)
+
+        if len(df) == 0:
+            raise ValueError(f"class_id={class_ids} 에 해당하는 데이터가 없습니다.")
+
     y = df["class_id"]
     X = df.drop(columns=["class_id"])
 
     return X, y
 
 
-# ==============================
-# 2. Autoencoder 모델 정의
-# ==============================
+# ==========================
+# Autoencoder 구성
+# ==========================
 def build_autoencoder(input_dim):
-    """
-    단층 Autoencoder 생성
-    """
     input_layer = Input(shape=(input_dim,))
     encoded = Dense(32, activation="relu")(input_layer)
     decoded = Dense(input_dim, activation="sigmoid")(encoded)
@@ -55,14 +54,10 @@ def build_autoencoder(input_dim):
     return autoencoder
 
 
-# ==============================
-# 3. LSTM 모델 정의
-# ==============================
+# ==========================
+# LSTM 모델 구성
+# ==========================
 def build_lstm(input_shape):
-    """
-    LSTM 기반 시계열 분류 모델
-    input_shape = (timesteps, features)
-    """
     model = tf.keras.Sequential([
         LSTM(64, return_sequences=False, input_shape=input_shape),
         Dense(32, activation="relu"),
@@ -77,30 +72,35 @@ def build_lstm(input_shape):
     return model
 
 
-# ==============================
-# 전체 훈련 프로세스
-# (Django View에서 호출할 함수)
-# ==============================
-def run_training(class_id=None, dataset_path="dataset.csv"):
+def run_training(class_ids=None, dataset_path="backend/ML/dataset.csv", stream_callback=None):
     """
-    Notebook 훈련 코드를 기반으로
-    Django가 호출 가능한 함수로 재구조화한 training pipeline.
+    Django View에서 호출되는 전체 training pipeline
+    stream_callback: StreamingResponse로 로그를 보내기 위한 optional 함수
     """
+
+    # ========== 내부 로그 함수 ========== 
+    def log(msg):
+        print(msg)  # 서버 콘솔에도 출력
+        if stream_callback:
+            stream_callback(msg)
 
     # -------------------------------
     # Step1: 데이터 로드
     # -------------------------------
-    X, y = load_dataset(class_id, dataset_path)
+    log(f"{class_ids} 데이터 로드 중...")
+    X, y = load_dataset(class_ids, dataset_path)
+    log(f"데이터 로드 완료 — 샘플 수: {len(X)}, feature: {X.shape[1]}")
 
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
-
     input_dim = X_scaled.shape[1]
 
     # -------------------------------
     # Step2: Autoencoder 훈련
     # -------------------------------
+    log("Autoencoder 모델 구성 중...")
     autoencoder = build_autoencoder(input_dim)
+    log("Autoencoder 학습 시작...")
 
     history_ae = autoencoder.fit(
         X_scaled,
@@ -108,17 +108,29 @@ def run_training(class_id=None, dataset_path="dataset.csv"):
         epochs=20,
         batch_size=32,
         validation_split=0.2,
-        verbose=0
+        verbose=0,
+        callbacks=[
+            tf.keras.callbacks.LambdaCallback(
+                on_epoch_end=lambda epoch, logs: log(
+                    f"[AE] Epoch {epoch+1}/20 — loss={logs['loss']:.4f}, val_loss={logs['val_loss']:.4f}"
+                )
+            )
+        ]
     )
 
-    # -------------------------------
-    # Step3: LSTM용 입력 reshape
-    # LSTM 입력: (samples, timesteps, features)
-    # timesteps = 1 로 flatten 처리
-    # -------------------------------
-    X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
+    log("Autoencoder 학습 완료")
 
+    # -------------------------------
+    # Step3: LSTM 입력 reshape
+    # -------------------------------
+    log("LSTM 입력 형태 변환 중...")
+    X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
     lstm_model = build_lstm((1, input_dim))
+
+    # -------------------------------
+    # Step4: LSTM 훈련
+    # -------------------------------
+    log("LSTM 학습 시작...")
 
     history_lstm = lstm_model.fit(
         X_lstm,
@@ -126,13 +138,23 @@ def run_training(class_id=None, dataset_path="dataset.csv"):
         epochs=20,
         batch_size=32,
         validation_split=0.2,
-        verbose=0
+        verbose=0,
+        callbacks=[
+            tf.keras.callbacks.LambdaCallback(
+                on_epoch_end=lambda epoch, logs: log(
+                    f"[LSTM] Epoch {epoch+1}/20 — loss={logs['loss']:.4f}, val_loss={logs['val_loss']:.4f}"
+                )
+            )
+        ]
     )
 
+    log("LSTM 학습 완료")
+
     # -------------------------------
-    # Step4: 결과 정리 후 반환
-    # UI에서 그래프로 표시할 수 있게 배열로 반환
+    # Step5: 결과 구조화 후 반환
     # -------------------------------
+    log("훈련 결과 정리 중...")
+
     results = {
         "autoencoder": {
             "loss": history_ae.history["loss"],
@@ -147,5 +169,7 @@ def run_training(class_id=None, dataset_path="dataset.csv"):
             "val_accuracy": history_lstm.history["val_accuracy"],
         }
     }
+
+    log("학습 종료")
 
     return results
