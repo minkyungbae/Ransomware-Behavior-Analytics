@@ -55,13 +55,13 @@ def train_models(request):
     except:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     
-    # 리스트가 비어있는지 확인
-    if not sample_ids or not isinstance(sample_ids, list):
-        return JsonResponse({"error": "sample_ids list is required"}, status=400)
+    # 리스트 내부에 유효한 문자열(string) ID만 있는지 검사
+    sample_ids = [str(item) for item in sample_ids if isinstance(item, (str, int)) and item is not None]
+    
+    if not sample_ids:
+        return JsonResponse({"error": "sample_ids list is required and must contain valid IDs."}, status=400)
 
-    # sample_ids 필수
-    if sample_ids is None:
-        return JsonResponse({"error": "sample_id is required"}, status=400)
+
 
     dataset_path = settings.BASE_DIR / "backend" / "ML" / "ransomwaredataset.csv"
 
