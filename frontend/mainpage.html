@@ -118,141 +118,190 @@
         // 1) 서버에서 sample_id 목록 가져오기 및 체크 박스 생성
         // ===================================================
         async function loadSamples() {
-            const res = await fetch("/samples/");
-            const data = await res.json();
+            try {
+                const res = await fetch("/samples/");
+                const data = await res.json();
+                const container = document.getElementById("checkbox_container");
 
-            const container = document.getElementById("checkbox_container");
+                if (data.sample_ids) {
+                    data.sample_ids.forEach(id => {
+                        const label = document.createElement("label");
+                        label.style.display = "block";
 
-            data.sample_ids.forEach(id => {
-                const label = document.createElement("label");
-                label.style.display = "block";
+                        const checkbox = document.createElement("input");
+                        checkbox.type = "checkbox";
+                        checkbox.value = id;
+                        checkbox.name = "sample_id_checkbox";
+                        checkbox.style.marginRight = "5px";
 
-                const checkbox = document.createElement("input");
-                checkbox.type = "checkbox";
-                checkbox.value = id;
-                checkbox.name = "sample_id_checkbox";
-                checkbox.style.marginRight = "5px";
-
-                label.appendChild(checkbox);
-                label.appendChild(document.createTextNode(id));
-                container.appendChild(label);
-            });
+                        label.appendChild(checkbox);
+                        label.appendChild(document.createTextNode(id));
+                        container.appendChild(label);
+                    });
+                }
+            } catch (e) {
+                console.error("샘플 로드 실패:", e);
+            }
         }
 
         loadSamples();
 
         // ===================================================
-        // 2) 모델 훈련 요청
+        // 2) 모델 훈련 요청 (스트리밍 방식 적용)
         // ===================================================
         document.getElementById("trainBtn").onclick = async () => {
-
-            const select = document.getElementById("class_select");
-            const checkboxes = document.querySelectorAll('#checkbox_container input[type="checkbox"]:checked')
-
-        
-            // 선택값 검증
-            const selectedValues = Array.from(checkboxes)
-            .filter(cb => cb.checked)
-            .map(ch => cb.value); // 문자열 그대로 사용('sample_00000')
+            const checkboxes = document.querySelectorAll('#checkbox_container input[type="checkbox"]:checked');
+            
+            // 선택값 추출
+            const selectedValues = Array.from(checkboxes).map(cb => cb.value);
 
             if (selectedValues.length === 0) {
-                alert("훈련할 샘플을 하나 이상 선택해주세요.")
+                alert("훈련할 샘플을 하나 이상 선택해주세요.");
                 return;
             }
-            
-            // UI 초기화
-            status.textContent = "모델 훈련 중... 잠시만 기다려주세요.";
-            document.getElementById("trainBtn").disabled = true;
 
-            // 그래프 영역 숨기기 (재훈련 시)
+            // 1. UI 초기화 (로딩바 표시, 버튼 비활성화, 이전 그래프 숨김)
+            const btn = document.getElementById("trainBtn");
+            const statusText = document.getElementById("status");
+            const progressContainer = document.getElementById("progress_container");
+            const progressBar = document.getElementById("progress_bar");
+            const progressPercent = document.getElementById("progress_text");
+
+            btn.disabled = true;
+            statusText.textContent = "서버 연결 중...";
+            progressContainer.style.display = "block"; // 로딩바 보이기
+            progressBar.style.width = "0%";
+            progressPercent.textContent = "0%";
+
             document.getElementById("ae_section").style.display = "none";
             document.getElementById("lstm_section").style.display = "none";
 
+            try {
+                // 2. 스트리밍 요청 보내기
+                const response = await fetch("/train/", { // url은 views.py url 설정에 따름 (ex: /train_models/)
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sample_ids: selectedValues })
+                });
 
-            // 스트리밍 요청
-            const response = await fetch("/train/", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ sample_ids: selectedValues })
-            });
+                // 스트림 리더 생성
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
 
+                // 3. 데이터 조각(Chunk) 읽기 루프
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-            // 결과
-            const data = await response.json();
-            document.getElementById("trainBtn").disabled = false;
+                    const chunk = decoder.decode(value, { stream: true });
+                    // 줄바꿈으로 나누어 처리 (한 번에 여러 줄이 올 수 있음)
+                    const lines = chunk.split("\n").filter(line => line.trim() !== "");
 
-            // 500 error 시, 오류 메시지 출력
-            if (response.status !==200 || data.error) {
-                status.textContent = "오류 발생: " + (data.error || "서버 응답 오류");
-                return;
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+
+                            if (data.status === "progress") {
+                                // [진행 중] 로딩바 업데이트
+                                progressBar.style.width = data.percent + "%";
+                                progressPercent.textContent = data.percent + "%";
+                                statusText.textContent = data.message;
+
+                            } else if (data.status === "complete") {
+                                // [완료] 그래프 그리기
+                                progressBar.style.width = "100%";
+                                progressPercent.textContent = "100%";
+                                statusText.textContent = "훈련 완료! 결과 분석 중...";
+                                
+                                // 잠시 후 그래프 표시
+                                setTimeout(() => {
+                                    renderAutoencoderCharts(data.results.autoencoder);
+                                    renderLstmCharts(data.results.lstm);
+                                    statusText.textContent = "모든 작업이 완료되었습니다.";
+                                    btn.disabled = false;
+                                }, 500);
+
+                            } else if (data.status === "error") {
+                                // [에러]
+                                statusText.textContent = "오류: " + data.message;
+                                progressBar.style.backgroundColor = "red";
+                                btn.disabled = false;
+                            }
+                        } catch (e) {
+                            console.error("JSON 파싱 에러:", e);
+                        }
+                    }
+                }
+
+            } catch (err) {
+                statusText.textContent = "통신 오류 발생: " + err;
+                btn.disabled = false;
             }
-
-            status.textContent = "훈련 완료! 아래 그래프를 확인하세요."
-
-            renderAutoencoderCharts(data.results.autoencoder);
-            renderLstmCharts(data.results.lstm);
-
-        }
+        };
 
         // ===================================================
-        // 3) Autoencoder 그래프
+        // 3) 그래프 렌더링 함수들 (기존 로직 유지)
         // ===================================================
+        let aeLossChart, aeAccChart, lstmLossChart, lstmAccChart;
+
         function renderAutoencoderCharts(ae) {
             document.getElementById("ae_section").style.display = "block";
+            
+            // 기존 차트가 있으면 삭제 (중복 생성 방지)
+            if (aeLossChart) aeLossChart.destroy();
+            if (aeAccChart) aeAccChart.destroy();
 
-            new Chart(document.getElementById("ae_loss"), {
+            aeLossChart = new Chart(document.getElementById("ae_loss"), {
                 type: "line",
                 data: {
                     labels: ae.loss.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Loss", data: ae.loss, borderWidth: 2 },
-                        { label: "Val Loss", data: ae.val_loss, borderWidth: 2 }
+                        { label: "Loss", data: ae.loss, borderColor: "red", fill: false },
+                        { label: "Val Loss", data: ae.val_loss || [], borderColor: "orange", fill: false }
                     ]
                 }
             });
 
-            new Chart(document.getElementById("ae_acc"), {
+            aeAccChart = new Chart(document.getElementById("ae_acc"), {
                 type: "line",
                 data: {
                     labels: ae.accuracy.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Accuracy", data: ae.accuracy, borderWidth: 2 },
-                        { label: "Val Accuracy", data: ae.val_accuracy, borderWidth: 2 }
+                        { label: "Accuracy", data: ae.accuracy, borderColor: "blue", fill: false },
+                        { label: "Val Accuracy", data: ae.val_accuracy || [], borderColor: "skyblue", fill: false }
                     ]
                 }
             });
         }
 
-
-        // ===================================================
-        // 4) LSTM 그래프
-        // ===================================================
         function renderLstmCharts(lstm) {
             document.getElementById("lstm_section").style.display = "block";
 
-            new Chart(document.getElementById("lstm_loss"), {
+            if (lstmLossChart) lstmLossChart.destroy();
+            if (lstmAccChart) lstmAccChart.destroy();
+
+            lstmLossChart = new Chart(document.getElementById("lstm_loss"), {
                 type: "line",
                 data: {
                     labels: lstm.loss.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Loss", data: lstm.loss, borderWidth: 2 },
-                        { label: "Val Loss", data: lstm.val_loss, borderWidth: 2 }
+                        { label: "Loss", data: lstm.loss, borderColor: "red", fill: false },
+                        { label: "Val Loss", data: lstm.val_loss || [], borderColor: "orange", fill: false }
                     ]
                 }
             });
 
-            new Chart(document.getElementById("lstm_acc"), {
+            lstmAccChart = new Chart(document.getElementById("lstm_acc"), {
                 type: "line",
                 data: {
                     labels: lstm.accuracy.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Accuracy", data: lstm.accuracy, borderWidth: 2 },
-                        { label: "Val Accuracy", data: lstm.val_accuracy, borderWidth: 2 }
+                        { label: "Accuracy", data: lstm.accuracy, borderColor: "blue", fill: false },
+                        { label: "Val Accuracy", data: lstm.val_accuracy || [], borderColor: "skyblue", fill: false }
                     ]
                 }
             });
         }
-
     </script>
 </body>
 </html>
