@@ -16,11 +16,11 @@ def mainpage(request):
 
 
 # ============================================================
-# 1. class_id 목록 제공
+# 1. sample_id 목록 제공
 # ============================================================
-def get_classes(request):
+def get_samples(request):
     """
-    backend/ML/ransomwaredataset.csv 파일을 읽어서 class_id 목록 반환
+    backend/ML/ransomwaredataset.csv 파일을 읽어서 sample_id 목록 반환
     """
     dataset_path = settings.BASE_DIR / "backend" / "ML" / "ransomwaredataset.csv"
 
@@ -29,9 +29,9 @@ def get_classes(request):
     except Exception as e:
         return JsonResponse({"error": f"Dataset load failed: {str(e)}"}, status=500)
 
-    class_ids = sorted(df["class_id"].unique().tolist())
+    sample_ids = sorted(df["sample_id"].unique().tolist())
 
-    return JsonResponse({"class_ids": class_ids})
+    return JsonResponse({"sample_ids": sample_ids})
 
 
 # ============================================================
@@ -42,7 +42,7 @@ def train_models(request):
     """
     POST 요청:
     {
-        "class_ids": [1, 3, 5]
+        "sample_ids": [1, 3, 5]
     }
     """
     if request.method != "POST":
@@ -51,27 +51,27 @@ def train_models(request):
     # JSON 파싱
     try:
         body = json.loads(request.body)
-        class_ids = body.get("class_ids", [])
+        sample_ids = body.get("sample_ids", [])
     except:
         return JsonResponse({"error": "Invalid JSON"}, status=400)
     
     # 리스트가 비어있는지 확인
-    if not class_ids or not isinstance(class_ids, list):
-        return JsonResponse({"error": "class_ids list is required"}, status=400)
+    if not sample_ids or not isinstance(sample_ids, list):
+        return JsonResponse({"error": "sample_ids list is required"}, status=400)
 
-    # class_ids 필수
-    if class_ids is None:
-        return JsonResponse({"error": "class_id is required"}, status=400)
+    # sample_ids 필수
+    if sample_ids is None:
+        return JsonResponse({"error": "sample_id is required"}, status=400)
 
     dataset_path = settings.BASE_DIR / "backend" / "ML" / "ransomwaredataset.csv"
 
     try:
         # ML 훈련 코드 실행
-        results = run_training(class_ids=class_ids, dataset_path=str(dataset_path))
+        results = run_training(sample_ids=sample_ids, dataset_path=str(dataset_path))
 
         return JsonResponse({
             "message": "Training completed",
-            "class_id": class_ids,
+            "sample_id": sample_ids,
             "results": results
         })
 
