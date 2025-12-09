@@ -33,13 +33,6 @@
         button:disabled {
             background: #777;
         }
-        select {
-            padding: 8px;
-            font-size: 16px;
-            margin-right: 15px;
-            height: 220px;
-            vertical-align: top;
-        }
         .chart-container {
             width: 700px;
             margin: 30px 0;
@@ -110,7 +103,7 @@
 
             data.class_ids.forEach(id => {
                 const label = document.createElement("label");
-                label.style.dispaly = "block";
+                label.style.display = "block";
 
                 const checkbox = document.createElement("input");
                 checkbox.type = "checkbox";
@@ -119,7 +112,7 @@
                 checkbox.style.marginRight = "5px";
 
                 label.appendChild(checkbox);
-                label.appendChil(document.createTextNode("Class " + id));
+                label.appendChild(document.createTextNode("Class " + id));
                 container.appendChild(label);
             });
         }
