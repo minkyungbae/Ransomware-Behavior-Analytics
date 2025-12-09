@@ -33,9 +33,15 @@
         button:disabled {
             background: #777;
         }
-        .chart-container {
-            width: 700px;
-            margin: 30px 0;
+        .chart_results {
+            display: flex;
+            gap: 20px;
+            justify-content: space-around;
+            flex-wrap: wrap;
+        }
+        .chart_results .chart-container {
+            flex: 1;
+            min-width: 300px;
         }
     </style>
 </head>
@@ -65,13 +71,12 @@
     <!-- Autoencoder 결과 -->
     <div id="ae_section" class="card" style="display:none;">
         <h2>Autoencoder 결과</h2>
-
-        <div class="chart-container">
+        <div class="chart_results"><div class="chart-container">
             <canvas id="ae_loss"></canvas>
         </div>
-
         <div class="chart-container">
             <canvas id="ae_acc"></canvas>
+        </div>
         </div>
     </div>
 
@@ -79,12 +84,12 @@
     <div id="lstm_section" class="card" style="display:none;">
         <h2>LSTM 모델 결과</h2>
 
-        <div class="chart-container">
+        <div class="chart_results"><div class="chart-container">
             <canvas id="lstm_loss"></canvas>
         </div>
-
         <div class="chart-container">
             <canvas id="lstm_acc"></canvas>
+        </div>
         </div>
     </div>
 
