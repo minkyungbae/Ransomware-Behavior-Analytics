@@ -38,7 +38,7 @@ def load_dataset(sample_ids=None, path="backend/ML/dataset.csv"):
         if len(df) == 0:
             raise ValueError(f"sample_id={sample_ids} 에 해당하는 데이터가 없습니다.")
 
-    y = df["sample_id"]
+    y = df["class_id"]
     X = df.drop(columns=["class_id", "sample_id", "class_name"])
 
     return X, y
@@ -65,12 +65,12 @@ def build_lstm(input_shape):
     model = tf.keras.Sequential([
         LSTM(64, return_sequences=False, input_shape=input_shape),
         Dense(32, activation="relu"),
-        Dense(1, activation="sigmoid")
+        Dense(10, activation="softmax")
     ])
 
     model.compile(
         optimizer=Adam(0.001),
-        loss="binary_crossentropy",
+        loss="sparse_categorical_crossentropy",
         metrics=["accuracy"]
     )
     return model
