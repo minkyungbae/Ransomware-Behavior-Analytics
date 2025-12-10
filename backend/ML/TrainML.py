@@ -1,159 +1,162 @@
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 import os
+import json
+import joblib  # [필수]
+import traceback
+from django.conf import settings
+from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import LSTM
 
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense, LSTM
-from tensorflow.keras.optimizers import Adam
-from sklearn.preprocessing import MinMaxScaler
-
-# ==========================
-# 데이터 로드
-# ==========================
-def load_dataset(target_ids=None, path="backend/ML/ransomwaredataset.csv"):
-    # 파일 경로 예외처리 (os.path 사용 권장)
-    if not os.path.exists(path):
-        # 만약 경로가 안 맞으면 기본 경로 시도 (settings.BASE_DIR 없이 실행될 때 대비)
-        path = "backend/ML/ransomwaredataset.csv"
-        
-    df = pd.read_csv(path)
-
-    # 필터링 로직 수정 (sample_id 기준인지 class_id 기준인지 확인 필요)
-    # views.py에서 sample_ids를 넘겨주므로, 여기서는 sample_id로 필터링하는 것이 안전함
-    # 만약 CSV에 sample_id 컬럼이 있다면 아래 사용:
-    filter_col = "sample_id" if "sample_id" in df.columns else "class_id"
-    
-    if target_ids is not None and len(target_ids) > 0:
-        df = df[df[filter_col].isin(target_ids)]
-        
-        if len(df) == 0:
-            # 빈 데이터면 에러 대신 빈 값 반환 (서버 다운 방지)
-            print(f"Warning: {target_ids}에 해당하는 데이터가 없습니다.")
-            return pd.DataFrame(), pd.Series()
-
-    # 타겟 컬럼(y) 설정 (class_id가 정답 라벨이라고 가정)
-    if "class_id" in df.columns:
-        y = df["class_id"]
-        # 학습에 불필요한 컬럼 제거 (에러 방지를 위해 errors='ignore' 추가)
-        X = df.drop(columns=["class_id", "sample_id", "class_name"], errors='ignore')
-    else:
-        # 정답 컬럼이 없을 경우 (예외 처리)
-        y = df.iloc[:, -1]
-        X = df.iloc[:, :-1]
-
-    return X, y
-
-
-# ==========================
-# Autoencoder 구성
-# ==========================
-def build_autoencoder(input_dim):
-    input_layer = Input(shape=(input_dim,))
-    encoded = Dense(32, activation="relu")(input_layer)
-    decoded = Dense(input_dim, activation="sigmoid")(encoded)
-
-    autoencoder = Model(inputs=input_layer, outputs=decoded)
-    autoencoder.compile(optimizer="adam", loss="mse", metrics=["accuracy"])
-
-    return autoencoder
-
-
-# ==========================
-# LSTM 모델 구성
-# ==========================
-def build_lstm(input_shape):
-    model = tf.keras.Sequential([
-        # LSTM 레이어
-        LSTM(32, return_sequences=False, input_shape=input_shape), # 64 -> 32로 줄임 (속도 향상)
-        Dense(16, activation="relu"), # 32 -> 16으로 줄임 (속도 향상)
-        Dense(10, activation="softmax")
-    ])
-
-    model.compile(
-        optimizer=Adam(0.001),
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"]
-    )
-    return model
-
+# 버전 호환성 클래스
+class SafeLSTM(LSTM):
+    def __init__(self, *args, **kwargs):
+        kwargs.pop('time_major', None) 
+        super().__init__(*args, **kwargs)
+    @classmethod
+    def from_config(cls, config):
+        config.pop('time_major', None)
+        return super().from_config(config)
 
 def run_training(sample_ids=None, dataset_path="backend/ML/ransomwaredataset.csv"):
-    """
-    Django View에서 호출되는 전체 training pipeline
-    """
-    
-    # [수정] 결과 딕셔너리 초기화
-    results = {}
-
-    print(f"[Info] 데이터 로드 중... (Target IDs: {sample_ids})")
-    X, y = load_dataset(sample_ids, dataset_path)
-    
-    if X.empty:
-        return {"error": "선택된 샘플에 대한 데이터가 없습니다."}
-
-    print(f"[Info] 데이터 로드 완료 — 샘플 수: {len(X)}")
-
-    scaler = MinMaxScaler()
-    X_scaled = scaler.fit_transform(X)
-    input_dim = X_scaled.shape[1]
-
-    # -------------------------------
-    # Step2: Autoencoder 훈련 (속도 최적화 적용)
-    # -------------------------------
-    print("[Info] Autoencoder 학습 시작...")
-    autoencoder = build_autoencoder(input_dim)
-
-    history_ae = autoencoder.fit(
-        X_scaled,
-        X_scaled,
-        epochs=5,         # [중요] 20 -> 5로 감소 (테스트용, 속도 4배 향상)
-        batch_size=128,   # [중요] 32 -> 128로 증가 (병렬 처리량 증가)
-        validation_split=0.2,
-        verbose=0,
-    )
-
-    # 임계값 계산
-    ae_predictions = autoencoder.predict(X_scaled, verbose=0)
-    reconstruction_errors = np.mean(np.square(X_scaled - ae_predictions), axis=1)
-    THRESHOLD = float(np.mean(reconstruction_errors) + 2 * np.std(reconstruction_errors)) # float 형변환 (JSON 오류 방지)
-    
-    print(f"[Info] Autoencoder 학습 완료 (Threshold: {THRESHOLD:.4f})")
-
-    # -------------------------------
-    # Step3: LSTM 훈련 (속도 최적화 적용)
-    # -------------------------------
-    print("[Info] LSTM 학습 시작...")
-    X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
-    lstm_model = build_lstm((1, input_dim))
-
-    history_lstm = lstm_model.fit(
-        X_lstm,
-        y,
-        epochs=5,         # [중요] 20 -> 5로 감소
-        batch_size=128,   # [중요] 32 -> 128로 증가
-        validation_split=0.2,
-        verbose=0,
-    )
-    print("[Info] LSTM 학습 완료")
-
-    # -------------------------------
-    # Step5: 결과 반환 (수정됨: val_loss 포함)
-    # -------------------------------
     results = {
-        "autoencoder": {
-            "loss": history_ae.history["loss"],
-            "val_loss": history_ae.history.get("val_loss", []), # [추가] 그래프 그리기용
-            "accuracy": history_ae.history["accuracy"],
-            "val_accuracy": history_ae.history.get("val_accuracy", []), # [추가]
-            "threshold": THRESHOLD,
-        },
-        "lstm": {
-            "loss": history_lstm.history["loss"],
-            "val_loss": history_lstm.history.get("val_loss", []), # [추가]
-            "accuracy": history_lstm.history["accuracy"],
-            "val_accuracy": history_lstm.history.get("val_accuracy", []), # [추가]
-        }
+        "autoencoder": {"loss": [], "val_loss": [], "accuracy": [], "val_accuracy": [], "threshold": 0},
+        "lstm": {"loss": [], "val_loss": [], "accuracy": [], "val_accuracy": []}
     }
+
+    # 경로 설정
+    ML_DIR = os.path.join(settings.BASE_DIR, "backend", "ML")
+    if not os.path.exists(dataset_path):
+        dataset_path = os.path.join(ML_DIR, "ransomwaredataset.csv")
+    
+    SCALER_PATH = os.path.join(ML_DIR, "scaler.pkl")
+    AE_MODEL_PATH = os.path.join(ML_DIR, "autoencoder_model.h5")
+    LSTM_MODEL_PATH = os.path.join(ML_DIR, "lstm_model.h5")
+    AE_THRESHOLD_PATH = os.path.join(ML_DIR, "ae_threshold.json")
+
+    # 1. 데이터 로드 및 필터링
+    try:
+        full_df = pd.read_csv(dataset_path)
+    except Exception as e:
+        print(f"[Error] 데이터 로드 실패: {e}")
+        return results
+
+    if sample_ids:
+        # 문자열로 변환하여 매칭
+        target_df = full_df[full_df["sample_id"].astype(str).isin([str(s) for s in sample_ids])]
+    else:
+        target_df = full_df
+        
+    if target_df.empty: return results
+
+    # 정답 라벨 및 raw 데이터 분리
+    drop_cols = ['sample_id', 'class_id', 'class_name']
+    y_target = target_df["class_id"].tolist() if "class_id" in target_df.columns else [0] * len(target_df)
+    X_raw = target_df.drop(columns=[c for c in drop_cols if c in target_df.columns])
+
+    # 2. [핵심] 스케일러 로드 및 변환
+    if not os.path.exists(SCALER_PATH):
+        print("[CRITICAL] scaler.pkl 없음! train_standalone.py를 먼저 실행하세요.")
+        return results
+    
+    try:
+        scaler = joblib.load(SCALER_PATH)
+        X_scaled = scaler.transform(X_raw) # 10개든 1개든 완벽하게 변환됨
+    except Exception as e:
+        print(f"[Error] 스케일링 실패: {e}")
+        return results
+
+    # ---------------------------------------------------------
+    # [Autoencoder 분석]
+    # ---------------------------------------------------------
+    if os.path.exists(AE_MODEL_PATH):
+        try:
+            ae = load_model(AE_MODEL_PATH, compile=False)
+            
+            # 임계값 로드
+            threshold = 0.05
+            if os.path.exists(AE_THRESHOLD_PATH):
+                with open(AE_THRESHOLD_PATH, 'r') as f:
+                    threshold = json.load(f).get("threshold", 0.05)
+
+            # 차원 안전장치
+            if X_scaled.shape[1] != ae.input_shape[-1]:
+                X_ae_in = X_scaled[:, :ae.input_shape[-1]]
+            else:
+                X_ae_in = X_scaled
+
+            preds = ae.predict(X_ae_in, verbose=0)
+            mse = np.mean(np.power(X_ae_in - preds, 2), axis=1)
+            
+            # 정확도(맞춤 여부) 계산
+            acc_list = []
+            for i, err in enumerate(mse):
+                is_malware_pred = 1 if err > threshold else 0
+                is_malware_true = 1 if y_target[i] > 0 else 0
+                acc_list.append(1.0 if is_malware_pred == is_malware_true else 0.0)
+
+            results["autoencoder"] = {
+                "loss": mse.tolist(),
+                "val_loss": [threshold] * len(mse),
+                "accuracy": acc_list,
+                "val_accuracy": [np.mean(acc_list)] * len(mse),
+                "threshold": threshold
+            }
+        except Exception as e:
+            print(f"[AE Error] {e}")
+
+    # ---------------------------------------------------------
+    # [LSTM 분석]
+    # ---------------------------------------------------------
+    if os.path.exists(LSTM_MODEL_PATH):
+        try:
+            lstm_model = load_model(LSTM_MODEL_PATH, custom_objects={'LSTM': SafeLSTM}, compile=False)
+            
+            # 차원 확장
+            X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
+            lstm_preds = lstm_model.predict(X_lstm, verbose=0)
+            
+            # 1. 악성일 확률 (Confidence)
+            if lstm_preds.shape[-1] > 1:
+                final_probs = (1.0 - lstm_preds[:, 0]).tolist() 
+                pred_classes = np.argmax(lstm_preds, axis=1)
+            else:
+                final_probs = lstm_preds.flatten().tolist()
+                pred_classes = [1 if p > 0.5 else 0 for p in final_probs]
+
+            # 2. 정답 여부 체크 (맞춤=1.0, 틀림=0.0)
+            lstm_is_correct_list = []
+            for pred, true_y in zip(pred_classes, y_target):
+                true_bin = 1 if true_y > 0 else 0
+                pred_bin = 1 if pred > 0 else 0
+                lstm_is_correct_list.append(1.0 if true_bin == pred_bin else 0.0)
+
+            # 3. [핵심] 평균 정확도 계산
+            # 10개 중 9개 맞췄으면 0.9
+            if len(lstm_is_correct_list) > 0:
+                avg_acc = sum(lstm_is_correct_list) / len(lstm_is_correct_list)
+            else:
+                avg_acc = 0.0
+
+            results["lstm"] = {
+                # 파란선: 모델이 생각하는 '악성일 확률' (높을수록 위험)
+                "accuracy": final_probs,      
+                
+                # 하늘색선: [수정됨] 이번 테스트의 '평균 정확도' (높을수록 모델이 똑똑함)
+                "val_accuracy": [avg_acc] * len(final_probs),
+                
+                # 빨간선: 예측 오차 (정답과 예측확률의 거리, 낮을수록 좋음)
+                # 정답(1) - 예측(0.9) = 0.1 (오차 작음)
+                # 정답(1) - 예측(0.2) = 0.8 (오차 큼)
+                "loss": [abs((1 if y > 0 else 0) - prob) for y, prob in zip(y_target, final_probs)],
+                
+                # 주황선: 목표 오차 (0.1 이하면 훌륭하다는 기준선)
+                "val_loss": [0.1] * len(final_probs)
+            }
+            
+            print(f"[Debug] LSTM 평균 정확도: {avg_acc * 100:.2f}%")
+
+        except Exception as e:
+            print(f"[LSTM Error] {e}")
 
     return results
