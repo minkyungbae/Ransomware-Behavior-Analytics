@@ -36,13 +36,19 @@
         .chart_results {
             display: flex;
             gap: 20px;
-            justify-content: space-around;
+            justify-content: flex-start;
             flex-wrap: wrap;
         }
         .chart_results .chart-container {
-            flex: 1;
-            min-width: 300px;
+            flex: 1 1 300px;       /* 최소 300px, 공간 남으면 늘어남 */
+            min-width: 300px;      /* 최소 너비 */
+            height: 350px;         /* 캔버스 높이 지정 */
+            background: #fff;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
         }
+     
     </style>
 </head>
 <body>
@@ -54,7 +60,7 @@
         <h1>Autoencoder Model 🤖</h1>
         <h2>Choose for samples of Ransomware Behavior Analytics</h2>
         ⭕ Multiple selection possible⭕
-        <div id="checkbox_container" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;">
+        <div id="checkbox_container" style="max-height: 350px; overflow-y: auto; border: 1px solid #ccc; padding: 10px;">
 
         </div>
         <button id="trainBtn">모델 훈련 시작</button>
@@ -72,25 +78,73 @@
 
 
     <!-- Sample들의 Threshold 그래프 표시하기(승운) -start -->
-
+    <div id="threshold_section" class="card" style="display:none;">
+        <h2>🔍 Anomaly Threshold Analysis (이상 탐지)</h2>
+        <p>
+            각 샘플의 <b style="color:#3498db;">MSE(오차)</b>가 
+            <b style="color:#e67e22;">Threshold(기준선)</b>을 초과하면 
+            랜섬웨어로 의심됩니다.<br>
+            파란 점선이 실제 샘플의 오차이며, 주황색 점선은 샘플별 계산된 기준선입니다.
+        </p>
+        <div style="height: 400px; width: 100%;">
+            <canvas id="threshold_chart" style="height:100%; width:100%;"></canvas>
+        </div>
+    </div>
+    
 
     <!-- Sample들의 Threshold 그래프 표시하기(승운) -end -->
 
 
     <!-- Autoencoder 결과 -->
+ 
     <div id="ae_section" class="card" style="display:none;">
-        <h2>Autoencoder 결과</h2>
-        <div class="chart_results"><div class="chart-container">
-            <canvas id="ae_loss"></canvas>
+    <h2> Autoencoder 결과</h2>
+    <div class="chart_row" style="display:flex; gap:20px; width:100%;">
+        <div class="chart_col" style="flex:1; min-width:0;">
+            <h3>📉 학습 손실 (Training Loss)</h3>
+            <canvas id="ae_loss_chart" style="width:100% !important; height:350px !important;"></canvas>
         </div>
-        <div class="chart-container">
-            <canvas id="ae_acc"></canvas>
+        <div class="chart_col" style="flex:1; min-width:0;">
+            <h3>📊 Autoencoder Reconstruction Error with Threshold</h3>
+            <canvas id="ae_hist_chart" style="width:100% !important; height:350px !important;"></canvas>
         </div>
+    </div>
+    </div>
+
+
+    <div id="class_table_section" class="card" style="display:none;">
+        <h2>📊 해석 결과</h2>
+        <p>AI가 분석한 샘플들의 <b>Normal vs Anomaly</b> 예측 결과입니다.</p>
+
+        <div style="overflow-x:auto;">
+            <table id="result_table" style="width:100%; border-collapse: collapse; text-align: center;">
+                <thead>
+                    <tr style="background-color:#f0f0f0;">
+                        <th style="border:1px solid #ccc; padding:8px;">Sample</th>
+                        <th style="border:1px solid #ccc; padding:8px;">MSE</th>
+                        <th style="border:1px solid #ccc; padding:8px;">Threshold</th>
+                        <th style="border:1px solid #ccc; padding:8px;">판단</th>
+                        <th style="border:1px solid #ccc; padding:8px;">해석</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- JS에서 행을 추가 -->
+                </tbody>
+            </table>
         </div>
     </div>
 
 
+
     <!-- class 분류 그래프 표시하기(승희) -start  -->
+
+    <div id="class_section" class="card" style="display:none;">
+        <h2>📊 Class Classification Result (분류 결과 요약)</h2>
+        <p>AI가 분석한 각 anomaly 샘플의 <b>10개 랜섬웨어 클래스별 확률</b>을 시각화한 그래프입니다.</p>
+
+        <!-- 각 anomaly 샘플별 그래프 담는 컨테이너 -->
+        <div class="chart_results" style="display: flex; flex-wrap: wrap; gap: 20px;"></div>
+    </div>
 
 
     <!-- class 분류 그래프 표시하기(승희) -end  -->
@@ -111,148 +165,585 @@
 
 
     <!-- Chart.js CDN -->
+   
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@1.1.0/dist/chartjs-plugin-annotation.min.js"></script>
 
     <script>
         // ===================================================
-        // 1) 서버에서 sample_id 목록 가져오기 및 체크 박스 생성
+        // 1) 서버에서 sample_id 목록 가져오기
         // ===================================================
         async function loadSamples() {
-            const res = await fetch("/samples/");
-            const data = await res.json();
+            try {
+                const res = await fetch("/samples/");
+                const data = await res.json();
+                const container = document.getElementById("checkbox_container");
 
-            const container = document.getElementById("checkbox_container");
+                if (data.sample_ids) {
+                    data.sample_ids.forEach(id => {
+                        const label = document.createElement("label");
+                        label.style.display = "block";
 
-            data.sample_ids.forEach(id => {
-                const label = document.createElement("label");
-                label.style.display = "block";
+                        const checkbox = document.createElement("input");
+                        checkbox.type = "checkbox";
+                        checkbox.value = id;
+                        checkbox.name = "sample_id_checkbox";
+                        checkbox.style.marginRight = "5px";
 
-                const checkbox = document.createElement("input");
-                checkbox.type = "checkbox";
-                checkbox.value = id;
-                checkbox.name = "sample_id_checkbox";
-                checkbox.style.marginRight = "5px";
-
-                label.appendChild(checkbox);
-                label.appendChild(document.createTextNode(id));
-                container.appendChild(label);
-            });
+                        label.appendChild(checkbox);
+                        label.appendChild(document.createTextNode(id));
+                        container.appendChild(label);
+                    });
+                }
+            } catch (e) {
+                console.error("샘플 로드 실패:", e);
+            }
         }
-
         loadSamples();
 
+
         // ===================================================
-        // 2) 모델 훈련 요청
+        // 2) 모델 훈련 스트리밍 요청
         // ===================================================
         document.getElementById("trainBtn").onclick = async () => {
+            const checkboxes = document.querySelectorAll('#checkbox_container input[type="checkbox"]:checked');
 
-            const select = document.getElementById("class_select");
-            const checkboxes = document.querySelectorAll('#checkbox_container input[type="checkbox"]:checked')
-
-        
-            // 선택값 검증
-            const selectedValues = Array.from(checkboxes)
-            .filter(cb => cb.checked)
-            .map(ch => ch.value); // 문자열 그대로 사용('sample_00000')
+            const selectedValues = Array.from(checkboxes).map(cb => cb.value);
 
             if (selectedValues.length === 0) {
-                alert("훈련할 샘플을 하나 이상 선택해주세요.")
+                alert("훈련할 샘플을 하나 이상 선택해주세요.");
                 return;
             }
-            
-            // UI 초기화
-            status.textContent = "모델 훈련 중... 잠시만 기다려주세요.";
-            document.getElementById("trainBtn").disabled = true;
 
-            // 그래프 영역 숨기기 (재훈련 시)
+            const btn = document.getElementById("trainBtn");
+            const statusText = document.getElementById("status");
+            const progressContainer = document.getElementById("progress_container");
+            const progressBar = document.getElementById("progress_bar");
+            const progressPercent = document.getElementById("progress_text");
+
+            btn.disabled = true;
+            statusText.textContent = "서버 연결 중...";
+            progressContainer.style.display = "block";
+            progressBar.style.width = "0%";
+            progressPercent.textContent = "0%";
+
             document.getElementById("ae_section").style.display = "none";
             document.getElementById("lstm_section").style.display = "none";
 
+            try {
+                const response = await fetch("/train/", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sample_ids: selectedValues })
+                });
 
-            // 스트리밍 요청
-            const response = await fetch("/train/", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ sample_ids: selectedValues })
-            });
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
 
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-            // 결과
-            const data = await response.json();
-            document.getElementById("trainBtn").disabled = false;
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split("\n").filter(line => line.trim() !== "");
 
-            // 500 error 시, 오류 메시지 출력
-            if (response.status !==200 || data.error) {
-                status.textContent = "오류 발생: " + (data.error || "서버 응답 오류");
-                return;
+                    for (const line of lines) {
+                        try {
+                            const data = JSON.parse(line);
+
+                            if (data.status === "progress") {
+                                progressBar.style.width = data.percent + "%";
+                                progressPercent.textContent = data.percent + "%";
+                                statusText.textContent = data.message;
+
+                            } else if (data.status === "complete") {
+                                progressBar.style.width = "100%";
+                                progressPercent.textContent = "100%";
+                                statusText.textContent = "훈련 완료! 결과 분석 중...";
+
+                                setTimeout(() => {
+                                    renderAutoencoderCharts(data.results.autoencoder);
+                                    renderThresholdChart(data.results.predictions);
+                                    renderLstmCharts(data.results.lstm);
+                                    renderClassTable(data.results.predictions);
+                                    renderClassChart(data.results.predictions);
+
+                                    statusText.textContent = "모든 작업이 완료되었습니다.";
+                                    btn.disabled = false;
+                                }, 500);
+
+                            } else if (data.status === "error") {
+                                statusText.textContent = "오류: " + data.message;
+                                progressBar.style.backgroundColor = "red";
+                                btn.disabled = false;
+                            }
+
+                        } catch (e) {
+                            console.error("JSON 파싱 에러:", e);
+                        }
+                    }
+                }
+
+            } catch (err) {
+                statusText.textContent = "통신 오류 발생: " + err;
+                btn.disabled = false;
             }
+        };
 
-            status.textContent = "훈련 완료! 아래 그래프를 확인하세요."
 
-            renderAutoencoderCharts(data.results.autoencoder);
-            renderLstmCharts(data.results.lstm);
+        // -------------------------------------------------
+        // 2. 샘플별 Threshold 차트 (Line + Point) - [수정됨]
+        // -------------------------------------------------
+        function renderSampleThresholdChart(preds) {
+            const labels = preds.map(p => p.sample_id);
+            const mses = preds.map(p => p.mse);
+            const thresholds = preds.map(p => p.threshold);
 
+            createChart("sample_threshold_chart", {
+                type: 'line', // 선 그래프로 변경
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Sample MSE (내 샘플 오차)',
+                            data: mses,
+                            borderColor: '#3498db', // 파란색 선
+                            backgroundColor: '#3498db',
+                            pointRadius: 6,       // 점 크기
+                            pointHoverRadius: 8,
+                            fill: false,
+                            order: 1 // 레이어 순서
+                        },
+                        {
+                            label: 'Sample Threshold (기준선)',
+                            data: thresholds,
+                            borderColor: '#e67e22', // 주황색 선
+                            backgroundColor: '#e67e22',
+                            pointStyle: 'crossRot', // X 모양 점
+                            pointRadius: 6,
+                            borderDash: [5, 5], // 점선 스타일
+                            fill: false,
+                            order: 0
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: 'Per-Sample Threshold vs MSE' },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: { 
+                        y: { 
+                            beginAtZero: true,
+                            title: { display: true, text: 'MSE / Threshold Value' }
+                        } 
+                    }
+                }
+            });
         }
 
+
+
+
         // ===================================================
-        // 3) Autoencoder 그래프
+        // AUTOENCODER 그래프 섹션
         // ===================================================
+        let aeLossChart = null;
+        let aeHistChart = null;
+
         function renderAutoencoderCharts(ae) {
             document.getElementById("ae_section").style.display = "block";
 
-            new Chart(document.getElementById("ae_loss"), {
+            if (aeLossChart) aeLossChart.destroy();
+            if (aeHistChart) aeHistChart.destroy();
+
+            const lossCtx = document.getElementById("ae_loss_chart").getContext("2d");
+
+            // Training Loss Chart
+            aeLossChart = new Chart(lossCtx, {
                 type: "line",
                 data: {
                     labels: ae.loss.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Loss", data: ae.loss, borderWidth: 2 },
-                        { label: "Val Loss", data: ae.val_loss, borderWidth: 2 }
+                        { label: "Training Loss", data: ae.loss, borderColor: "#3498db", fill: false },
+                        { label: "Validation Loss", data: ae.val_loss || [], borderColor: "orange", fill: false }
                     ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { title: { display: true, text: "Autoencoder Loss per Epoch" } }
                 }
             });
 
-            new Chart(document.getElementById("ae_acc"), {
-                type: "line",
-                data: {
-                    labels: ae.accuracy.map((_, i) => i + 1),
-                    datasets: [
-                        { label: "Accuracy", data: ae.accuracy, borderWidth: 2 },
-                        { label: "Val Accuracy", data: ae.val_accuracy, borderWidth: 2 }
-                    ]
+            // Histogram Chart
+            const histCtx = document.getElementById("ae_hist_chart").getContext("2d");
+            const counts = ae.histogram.counts;
+            const bins = ae.histogram.bins;
+            const threshold = ae.global_threshold;
+
+
+
+            // ⭐ bins → centers 변환
+            let centers = [];
+            if (bins.length === counts.length + 1) {
+                for (let i = 0; i < counts.length; i++) {
+                    centers.push((bins[i] + bins[i + 1]) / 2);
                 }
+            } else {
+                centers = bins.slice();
+            }
+
+            // ⭐ Chart.js threshold 라인 plugin
+            const thresholdLine = {
+                id: 'thresholdLine',
+                afterDraw(chart, args, opts) {
+                    const { ctx, chartArea: { top, bottom }, scales: { x } } = chart;
+                    const xPos = x.getPixelForValue(threshold);
+
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'red';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([6, 4]);
+                    ctx.moveTo(xPos, top);
+                    ctx.lineTo(xPos, bottom);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            };
+
+            aeHistChart = new Chart(histCtx, {
+                type: 'bar',
+                data: {
+                    datasets: [{
+                        label: 'Count',
+                        data: counts.map((c, i) => ({ x: centers[i], y: c })),
+                        parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+                        backgroundColor: 'rgba(46,204,113,0.6)',
+                        borderColor: 'rgba(46,204,113,1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: { display: true, text: 'MSE' }
+                        },
+                        y: {
+                            title: { display: true, text: 'Count' }
+                        }
+                    }
+                },
+                plugins: [thresholdLine]
             });
         }
 
 
+
         // ===================================================
-        // 4) LSTM 그래프
+        // LSTM 그래프
         // ===================================================
+        let lstmLossChart, lstmAccChart;
+
         function renderLstmCharts(lstm) {
             document.getElementById("lstm_section").style.display = "block";
 
-            new Chart(document.getElementById("lstm_loss"), {
+            if (lstmLossChart) lstmLossChart.destroy();
+            if (lstmAccChart) lstmAccChart.destroy();
+
+            lstmLossChart = new Chart(document.getElementById("lstm_loss"), {
                 type: "line",
                 data: {
                     labels: lstm.loss.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Loss", data: lstm.loss, borderWidth: 2 },
-                        { label: "Val Loss", data: lstm.val_loss, borderWidth: 2 }
+                        { label: "Loss", data: lstm.loss, borderColor: "red", fill: false },
+                        { label: "Val Loss", data: lstm.val_loss || [], borderColor: "orange", fill: false }
                     ]
                 }
             });
 
-            new Chart(document.getElementById("lstm_acc"), {
+            lstmAccChart = new Chart(document.getElementById("lstm_acc"), {
                 type: "line",
                 data: {
                     labels: lstm.accuracy.map((_, i) => i + 1),
                     datasets: [
-                        { label: "Accuracy", data: lstm.accuracy, borderWidth: 2 },
-                        { label: "Val Accuracy", data: lstm.val_accuracy, borderWidth: 2 }
+                        { label: "Accuracy", data: lstm.accuracy, borderColor: "blue", fill: false },
+                        { label: "Val Accuracy", data: lstm.val_accuracy || [], borderColor: "skyblue", fill: false }
                     ]
                 }
             });
         }
 
+
+
+        // ===================================================
+        // 5) SAMPLE THRESHOLD 그래프 + 클릭 이벤트 → AE Histogram 수정
+        // ===================================================
+        let thresholdChart = null;
+
+        function renderThresholdChart(predictions) {
+            document.getElementById("threshold_section").style.display = "block";
+
+            const ctx = document.getElementById('threshold_chart').getContext('2d');
+
+            if (thresholdChart) thresholdChart.destroy();
+
+            // 🔥 샘플 전체 저장 → 클릭 시 참조
+            window.samplePredictions = predictions;
+
+            const labels = predictions.map(p => p.sample_id);
+            const mses = predictions.map(p => p.mse);
+            const thresholds = predictions.map(p => p.threshold);
+
+            thresholdChart = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: "Sample MSE",
+                            data: mses,
+                            borderColor: "#3498db",
+                            pointRadius: 6,
+                            fill: false
+                        },
+                        {
+                            label: "Threshold",
+                            data: thresholds,
+                            borderColor: "#e67e22",
+                            borderDash: [5, 5],
+                            pointRadius: 6,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,   // ⭐ 가로폭 넓어짐!
+                    onClick: function (evt, elements) {
+                        if (elements.length > 0) {
+                            const index = elements[0].index;
+                            const sample = window.samplePredictions[index];
+                            updateAEHistogram(sample);
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: "Sample ID"   // ⭐ x축 제목 추가
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: "MSE / Threshold"   // ⭐ y축 제목 추가
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Per-Sample Anomaly Threshold Analysis'
+                        }
+                    }
+                }
+            });
+        }
+
+
+        // ===================================================
+        // 6) AE Histogram 업데이트 (샘플 선택 시)
+        // ===================================================
+        function updateAEHistogram(sample) {
+            if (!aeHistChart) return;
+
+            const bins = sample.histogram.bins;
+            const counts = sample.histogram.counts;
+            const threshold = sample.threshold;
+
+            aeHistChart.data.labels = bins.map(v => v.toFixed(4));
+            aeHistChart.data.datasets = [
+                {
+                    label: "Reconstruction Error Frequency",
+                    data: counts
+                }
+            ];
+
+            // 🔥 threshold 라인 추가
+            aeHistChart.options.plugins.annotation = {
+                annotations: {
+                    thresholdLine: {
+                        type: "line",
+                        scaleID: "x",
+                        borderColor: "red",
+                        borderWidth: 2,
+                        value: threshold,
+                        label: {
+                            enabled: true,
+                            color: "red",
+                            content: "Threshold " + threshold.toFixed(4)
+                        }
+                    }
+                }
+            };
+
+            aeHistChart.update();
+        }
+
+
+
+        function interpretCase(mse, th) {
+            if (th === 0) return "계산 불가";
+            const ratio = mse / th;
+            if (ratio < 0.5) {
+                return "정상 (Safe) - 정상 Encryptor 패턴과 매우 유사함";
+            } else if (ratio < 0.8) {
+                return "정상 (Stable) - 정상 패턴 대비 미세한 변동 존재";
+            } else if (ratio < 1.0) {
+                return "경계 (Warning) - 정상 범위이지만 편차가 다소 있음";
+            } else if (ratio < 1.5) {
+                return "경미한 이상 (Minor Anomaly) - 정상 패턴과 일부 차이가 감지됨";
+            } else if (ratio < 2.0) {
+                return "이상 (Anomaly) - 정상 Encryptor 행동 패턴과 명확하게 다름";
+            } else {
+                return "고위험 (Critical) - baseline을 크게 벗어난 공격성 패턴";
+            }
+        }
+
+
+
+
+
+        function renderClassTable(predictions) {
+            document.getElementById("class_table_section").style.display = "block";
+
+            const tbody = document.querySelector("#result_table tbody");
+            tbody.innerHTML = ""; // 기존 내용 초기화
+
+            predictions.forEach(sample => {
+                const row = document.createElement("tr");
+
+                // Sample ID
+                const tdSample = document.createElement("td");
+                tdSample.textContent = sample.sample_id;
+                row.appendChild(tdSample);
+
+                // MSE
+                const tdMSE = document.createElement("td");
+                tdMSE.textContent = sample.mse.toFixed(4);
+                row.appendChild(tdMSE);
+
+                // Threshold
+                const tdThreshold = document.createElement("td");
+                tdThreshold.textContent = sample.threshold.toFixed(4);
+                row.appendChild(tdThreshold);
+
+                // 판단 (MSE > Threshold -> 랜섬웨어, 아니면 정상)
+                const tdDecision = document.createElement("td");
+                tdDecision.textContent = sample.mse > sample.threshold ? "Anomaly" : "Normal";
+                tdDecision.style.color = sample.mse > sample.threshold ? "red" : "green";
+                row.appendChild(tdDecision);
+
+                // 해석 (간단 설명)
+                const tdInterpret = document.createElement("td");
+                tdInterpret.textContent = interpretCase(sample.mse, sample.threshold);
+                row.appendChild(tdInterpret);
+
+                tbody.appendChild(row);
+            });
+        }
+
+
+
+        // ===================================================
+        // CLASSIFICATION BAR CHART
+        // ===================================================
+        let classChart = null;
+
+        function renderClassChart(predictions) {
+            const section = document.getElementById("class_section");
+            section.style.display = "block";
+
+            const container = section.querySelector(".chart_results");
+            container.innerHTML = ""; // 기존 그래프 초기화
+
+            // Anomaly 샘플만 선택
+            const anomalySamples = predictions.filter(s => s.mse > s.threshold);
+
+            const classNames = [
+                "Encryptor",
+                "Locker",
+                "Wiper",
+                "Worm-propagating Ransom",
+                "Human-operated Ransom",
+                "Phishing-based Ransom",
+                "RDP Brute-force based",
+                "Exploit-based Ransom",
+                "USB/Removable-media Ransom",
+                "Cloud/SaaS-targeted Ransom"
+            ];
+
+            anomalySamples.forEach((sample, idx) => {
+                // 1. chart-container 생성
+                const chartDiv = document.createElement("div");
+                chartDiv.classList.add("chart-container");
+                chartDiv.style.flex = "1";
+                chartDiv.style.minWidth = "300px";
+                chartDiv.style.height = "350px"; // 높이 지정
+                chartDiv.style.marginBottom = "20px";
+
+                // 2. canvas 생성
+                const canvas = document.createElement("canvas");
+                canvas.id = `class_chart_${idx}`;
+                canvas.style.width = "100%";
+                canvas.style.height = "100%";
+                chartDiv.appendChild(canvas);
+                container.appendChild(chartDiv);
+
+                // 3. Chart.js 생성
+                const ctx = canvas.getContext('2d');
+                new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: classNames,
+                        datasets: [{
+                            label: `Sample ${sample.sample_id} 클래스 확률`,
+                            data: classNames.map(cls => sample.class_probs[cls] ?? 0),
+                            backgroundColor: classNames.map((_, i) => `hsl(${i * 36}, 70%, 50%)`)
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false, // 부모 높이에 맞춤
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: `샘플 ${sample.sample_id} 클래스 확률`
+                            },
+                            tooltip: { mode: 'index', intersect: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 1,
+                                title: { display: true, text: '확률' }
+                            }
+                        }
+                    }
+                });
+            });
+        }
+
     </script>
+
 </body>
 </html>
