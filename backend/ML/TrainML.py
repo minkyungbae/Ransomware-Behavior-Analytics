@@ -1,181 +1,272 @@
-'''
-[이 파일 속 코드의 목적]
--> ransomware-model.ipynb 파일 속 코드를 참고하여 Django에서 사용할 수 있도록한 파일입니다.
-
-[포함된 기능 목록]
-1. Autoencoder + LSTM 두 모델 모두 포함
-2. 훈련 결과(loss/acc 그래프 데이터) JSON 형태로 반환
-3. sample_id 필터링 가능
-4. Django View에서 import 후 바로 호출 가
-'''
-
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense, LSTM
-from tensorflow.keras.optimizers import Adam
-from sklearn.preprocessing import MinMaxScaler
-
-
-# ==========================
-# 데이터 로드
-# ==========================
-def load_dataset(sample_ids=None, path="backend/ML/dataset.csv"):
-    df = pd.read_csv(path)
-
-    # sample_ids가 유효한 리스트인지 확인
-    if sample_ids and isinstance(sample_ids, list) and len(sample_ids) > 0:
-        # sample_ids를 문자열 리스트로 변환
-        sample_ids_str = [str(sid) for sid in sample_ids if sid is not None]
-
-        if "sample_id" not in df.columns:
-            raise KeyError("'sample_id' 컬럼이 backend/ML/dataset.csv 안에 없습니다.")
-
-        df = df[df["sample_id"].isin(sample_ids)] # 다중 필터링(.init)
-
-        if len(df) == 0:
-            raise ValueError(f"sample_id={sample_ids} 에 해당하는 데이터가 없습니다.")
-
-    y = df["class_id"]
-    X = df.drop(columns=["class_id", "sample_id", "class_name"])
-
-    return X, y
+import os
+import json
+import joblib  # [필수]
+import traceback
+from django.conf import settings
+from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import LSTM
+import logging
 
 
-# ==========================
-# Autoencoder 구성
-# ==========================
-def build_autoencoder(input_dim):
-    input_layer = Input(shape=(input_dim,))
-    encoded = Dense(32, activation="relu")(input_layer)
-    decoded = Dense(input_dim, activation="sigmoid")(encoded)
-
-    autoencoder = Model(inputs=input_layer, outputs=decoded)
-    autoencoder.compile(optimizer="adam", loss="mse", metrics=["accuracy"])
-
-    return autoencoder
+# 로거 설정 (콘솔에만 출력하고 HTTP 응답에는 영향 안 줌)
+logger = logging.getLogger(__name__)
 
 
-# ==========================
-# LSTM 모델 구성
-# ==========================
-def build_lstm(input_shape):
-    model = tf.keras.Sequential([
-        LSTM(64, return_sequences=False, input_shape=input_shape),
-        Dense(32, activation="relu"),
-        Dense(10, activation="softmax")
-    ])
+# 버전 호환성 클래스
+class SafeLSTM(LSTM):
+    def __init__(self, *args, **kwargs):
+        kwargs.pop('time_major', None) 
+        super().__init__(*args, **kwargs)
+    @classmethod
+    def from_config(cls, config):
+        config.pop('time_major', None)
+        return super().from_config(config)
+    
 
-    model.compile(
-        optimizer=Adam(0.001),
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"]
-    )
-    return model
-
-
-def run_training(sample_ids=None, dataset_path="backend/ML/dataset.csv", stream_callback=None):
+# =========================================
+# 1. 헬퍼 함수 : Threshold 계산 및 해석 로직
+# =========================================
+def compute_sample_threshold(sample, recon_sample):
     """
-    Django View에서 호출되는 전체 training pipeline
+    샘플 자체 오차 분포(feature-wise error)의 70% 분위를 
+    개별 Threshold로 설정
     """
+    errors = (sample-recon_sample)**2
+    # 70percentile을 threshold로 사용
+    return float(np.percentile(errors, 70))
 
-    # ========== 내부 로그 함수 ========== 
-    def log(msg):
-        print(msg)  # 서버 콘솔에도 출력
-
-    # -------------------------------
-    # Step1: 데이터 로드
-    # -------------------------------
-    log(f"{sample_ids} 데이터 로드 중...")
-    X, y = load_dataset(sample_ids, dataset_path)
-    log(f"데이터 로드 완료 — 샘플 수: {len(X)}, feature: {X.shape[1]}")
-
-    scaler = MinMaxScaler()
-    X_scaled = scaler.fit_transform(X)
-    input_dim = X_scaled.shape[1]
-
-    # -------------------------------
-    # Step2: Autoencoder 훈련
-    # -------------------------------
-    log("Autoencoder 모델 구성 중...")
-    autoencoder = build_autoencoder(input_dim)
-    log("Autoencoder 학습 시작...")
-
-    history_ae = autoencoder.fit(
-        X_scaled,
-        X_scaled,
-        epochs=20,
-        batch_size=32,
-        validation_split=0.2,
-        verbose=0,
-    )
-
-    log("Autoencoder 학습 완료")
-
-    # ------------------------------------------
-    # Autoencoder 이상 탐지 임계값(Threshold) 계산
-    # ------------------------------------------
-    # 훈련 데이터 전체에 대한 재구성 예측 수행
-    ae_predictions = autoencoder.predict(X_scaled, verbose=0)
-
-    # 각 샘플별 MSE (재구성 오차) 계산
-    reconstruction_errors = np.mean(np.square(X_scaled - ae_predictions), axis=1)
-
-    # MSE의 평균 및 표준 편차 계산
-    mean_err = np.mean(reconstruction_errors)
-    std_err = np.std(reconstruction_errors)
-
-    # 임계값 설정: 평균 + 2 * 표준편차
-    THRESHOLD = mean_err + 2 * std_err
-    log(f"Autoencoder 이상 탐지 임계값: {THRESHOLD:.6f}")
+def interpret_case(mse, th):
+    """
+    MSE와 Threshold 비율에 따른 상태 해석
+    """
+    if th == 0: return "계산 불가"
+    ratio = mse / th
+    if ratio < 0.5:
+        return "정상 (Safe) - 정상 Encryptor 패턴과 매우 유사함"
+    elif ratio < 0.8:
+        return "정상 (Stable) - 정상 패턴 대비 미세한 변동 존재"
+    elif ratio < 1.0:
+        return "경계 (Warning) - 정상 범위이지만 편차가 다소 있음"
+    elif ratio < 1.5:
+        return "경미한 이상 (Minor Anomaly) - 정상 패턴과 일부 차이가 감지됨"
+    elif ratio < 2.0:
+        return "이상 (Anomaly) - 정상 Encryptor 행동 패턴과 명확하게 다름"
+    else:
+        return "고위험 (Critical) - baseline을 크게 벗어난 공격성 패턴"
+    
 
 
-    # -------------------------------
-    # Step3: LSTM 입력 reshape
-    # -------------------------------
-    log("LSTM 입력 형태 변환 중...")
-    X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
-    lstm_model = build_lstm((1, input_dim))
-
-    # -------------------------------
-    # Step4: LSTM 훈련
-    # -------------------------------
-    log("LSTM 학습 시작...")
-
-    history_lstm = lstm_model.fit(
-        X_lstm,
-        y,
-        epochs=20,
-        batch_size=32,
-        validation_split=0.2,
-        verbose=0,
-    )
-
-    log("LSTM 학습 완료")
-
-    # -------------------------------
-    # Step5: 결과 구조화 후 반환
-    # -------------------------------
-    log("훈련 결과 정리 중...")
-
+# =========================================
+# 2. 메인 실행 함수
+# =========================================
+def run_training(sample_ids=None, dataset_path="backend/ML/ransomwaredataset.csv"):
     results = {
-        "autoencoder": {
-            "loss": history_ae.history["loss"],
-            "val_loss": history_ae.history["val_loss"],
-            "accuracy": history_ae.history["accuracy"],
-            "val_accuracy": history_ae.history["val_accuracy"],
-            "threshold": THRESHOLD,
-        },
-        "lstm": {
-            "loss": history_lstm.history["loss"],
-            "val_loss": history_lstm.history["val_loss"],
-            "accuracy": history_lstm.history["accuracy"],
-            "val_accuracy": history_lstm.history["val_accuracy"],
-        }
+        "autoencoder": {},
+        "lstm": {},
+        "predictions": []
     }
 
-    log("학습 종료")
+    # 경로 설정
+    ML_DIR = os.path.join(settings.BASE_DIR, "backend", "ML")
+    HISTORY_PATH = os.path.join(ML_DIR, "training_history.json")
+
+    if not os.path.exists(dataset_path):
+        dataset_path = os.path.join(ML_DIR, "ransomwaredataset.csv")
+    
+    SCALER_PATH = os.path.join(ML_DIR, "scaler.pkl")
+    AE_MODEL_PATH = os.path.join(ML_DIR, "autoencoder_model.h5")
+    LSTM_MODEL_PATH = os.path.join(ML_DIR, "lstm_model.h5")
+    AE_THRESHOLD_PATH = os.path.join(ML_DIR, "ae_threshold.json")
+
+    # 1. 훈련 히스토리 로드 (그래프용)
+    history_data = {"autoencoder": {}, "lstm": {}}
+    if os.path.exists(HISTORY_PATH):
+        try:
+            with open(HISTORY_PATH, 'r') as f:
+                history_data = json.load(f)
+        except Exception as e:
+            # print(f"[Warning] 히스토리 로드 실패: {e}")
+            pass
+
+    # 2. 데이터 로드 및 필터링
+    try:
+        full_df = pd.read_csv(dataset_path)
+    except Exception as e:
+        # print(f"[Error] 데이터 로드 실패: {e}")
+        return results
+
+    if sample_ids:
+        # 문자열로 변환하여 매칭
+        target_df = full_df[full_df["sample_id"].astype(str).isin([str(s) for s in sample_ids])]
+    else:
+        target_df = full_df
+        
+    if target_df.empty: return results
+
+    # 정답 라벨 및 raw 데이터 분리
+    drop_cols = ['sample_id', 'class_id', 'class_name']
+    # class_id가 있으면 가져오고 없으면 0 처리
+    y_target = target_df["class_id"].tolist() if "class_id" in target_df.columns else [0] * len(target_df)
+    X_raw = target_df.drop(columns=[c for c in drop_cols if c in target_df.columns])
+
+    # 3. [핵심] 스케일러 로드 및 변환
+    if not os.path.exists(SCALER_PATH):
+        # print("[CRITICAL] scaler.pkl 없음! train_standalone.py를 먼저 실행하세요.")
+        return results
+    
+    try:
+        scaler = joblib.load(SCALER_PATH)
+        X_scaled = scaler.transform(X_raw.values) # 10개든 1개든 완벽하게 변환됨
+    except Exception as e:
+        # print(f"[Error] 스케일링 실패: {e}")
+        return results
+
+
+
+    # ---------------------------------------------------------
+    # [Autoencoder 분석]
+    # ---------------------------------------------------------
+    global_threshold = 0.05
+    hist_data = {"counts": [], "bins": []}
+
+    if os.path.exists(AE_MODEL_PATH):
+        try:
+            ae = load_model(AE_MODEL_PATH, compile=False)
+            
+            # 글로벌 임계값 및 히스토그램 로드
+            if os.path.exists(AE_THRESHOLD_PATH):
+                with open(AE_THRESHOLD_PATH, 'r') as f:
+                    loaded_data = json.load(f)
+                    global_threshold = loaded_data.get("threshold", 0.05)
+                    hist_data["counts"] = loaded_data.get("hist_counts", [])
+                    hist_data["bins"] = loaded_data.get("hist_bins", [])
+
+
+            # 차원 안전장치
+            if X_scaled.shape[1] != ae.input_shape[-1]:
+                X_ae_in = X_scaled[:, :ae.input_shape[-1]]
+            else:
+                X_ae_in = X_scaled
+
+            
+            # 예측 및 재구성
+            recon_samples = ae.predict(X_ae_in, verbose=0)
+
+            # AE 그래프 데이터 구성
+            results["autoencoder"] = {
+                "loss": history_data["autoencoder"].get("loss", []),
+                "val_loss": history_data["autoencoder"].get("val_loss", []),
+                "accuracy": history_data["autoencoder"].get("accuracy", []),
+                "global_threshold": global_threshold,
+                "histogram": hist_data
+            }
+
+        except Exception as e:
+            # print(f"[AE Error] {e}")
+            recon_samples = np.zeros_like(X_scaled)
+
+
+            
+    # ---------------------------------------------------------
+    # [LSTM 분석 & 결과 통합]
+    # ---------------------------------------------------------
+    lstm_probs_list = []
+
+    if os.path.exists(LSTM_MODEL_PATH):
+        try:
+            lstm_model = load_model(LSTM_MODEL_PATH, custom_objects={'LSTM': SafeLSTM}, compile=False)
+            
+            # 차원 확장
+            X_lstm = X_scaled.reshape((X_scaled.shape[0], 1, X_scaled.shape[1]))
+            lstm_preds = lstm_model.predict(X_lstm, verbose=0)
+
+
+            results["lstm"] = {
+                "loss": history_data["lstm"].get("loss", []),
+                "val_loss": history_data["lstm"].get("val_loss", []),
+                "accuracy": history_data["lstm"].get("accuracy", []),  
+                "val_accuracy": history_data["lstm"].get("val_accuracy", []),
+            }
+
+            lstm_probs_list = lstm_preds.tolist()
+
+
+        except Exception as e:
+            # print(f"[LSTM Error] {e}")
+            pass
+
+
+
+    # ---------------------------------------------------------
+    # [데이터 병합 : 샘플별 상세 결과 생성]
+    # ---------------------------------------------------------
+    predictions_list = []
+
+    class_names = {
+    0: "Encryptor",
+    1: "Locker",
+    2: "Wiper",
+    3: "Worm-propagating Ransom",
+    4: "Human-operated Ransom",
+    5: "Phishing-based Ransom",
+    6: "RDP Brute-force based",
+    7: "Exploit-based Ransom",
+    8: "USB/Removable-media Ransom",
+    9: "Cloud/SaaS-targeted Ransom",
+    }
+
+
+    for i in range(len(target_df)):
+            sample_id = str(target_df.iloc[i]["sample_id"])
+
+            # 1. AE: Sample Specific Threshold & MSE
+            sample_vec = X_scaled[i]
+            recon_vec = recon_samples[i]
+
+            errors = (sample_vec - recon_vec)**2
+            mse_val = float(np.mean(errors))
+
+            counts, bins = np.histogram(errors, bins=30)
+            sample_th = compute_sample_threshold(sample_vec, recon_vec)
+            interpretation = interpret_case(mse_val, sample_th)
+
+            # Anomaly 여부 판단 (ratio >= 1.0이면 경계 이상)
+            is_anomaly = (mse_val > sample_th)
+            judgment = "Anomaly" if is_anomaly else "Normal"
+
+            # 2. LSTM: Class Probabilities (10 classes)
+            # 만약 LSTM 예측이 실패했으면 0으로 채움
+            if i < len(lstm_probs_list):
+                probs = lstm_probs_list[i]
+            else:
+                probs = [0.0] * 10
+
+
+            # ⭐ 클래스 이름과 매핑
+            class_probs = {class_names[j]: float(probs[j]) for j in range(10)}
+
+
+            
+            predictions_list.append({
+            "sample_id": sample_id,
+            "mse": mse_val,
+            "threshold": sample_th,
+            "is_anomaly": is_anomaly,
+            "judgment": judgment,
+            "interpretation": interpretation,
+            "lstm_probs": probs,  # [0.1, 0.05, ..., 0.8] (10개)
+            "class_probs": class_probs,
+            "true_class": int(y_target[i]),
+            "histogram": {
+                "counts": counts.tolist(),
+                "bins": bins.tolist()
+            }     
+            })
+
+    results["predictions"] = predictions_list
 
     return results
+
+            
