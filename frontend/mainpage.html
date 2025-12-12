@@ -125,6 +125,7 @@
                         <th style="border:1px solid #ccc; padding:8px;">Threshold</th>
                         <th style="border:1px solid #ccc; padding:8px;">판단</th>
                         <th style="border:1px solid #ccc; padding:8px;">해석</th>
+                        <th style="border:1px solid #ccc; padding:8px;">알람</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -655,11 +656,45 @@
 
                 // 해석 (간단 설명)
                 const tdInterpret = document.createElement("td");
-                tdInterpret.textContent = interpretCase(sample.mse, sample.threshold);
+                const interpretation = interpretCase(sample.mse, sample.threshold)
+                tdInterpret.textContent = interpretation;
+
+            
+                if(interpretation.includes("고위험")){
+                    tdInterpret.style.color = "red";
+                }
+
                 row.appendChild(tdInterpret);
+
+
+                const tdAlarm = document.createElement("td");
+                tdAlarm.style.textAlign = "center";
+                tdAlarm.style.width = "50px";
+
+                const alarmCircle = document.createElement("span");
+                alarmCircle.style.display = "inline-block";
+                alarmCircle.style.width = "16px";
+                alarmCircle.style.height = "16px";
+                alarmCircle.style.borderRadius = "50%";
+                alarmCircle.style.backgroundColor = "gray"; // 기본값
+
+                // 상태별 색상
+                if(interpretation.includes("고위험")){
+                    alarmCircle.style.backgroundColor = "red";
+                } else if(interpretation.includes("경계") || interpretation.includes("이상")){
+                    alarmCircle.style.backgroundColor = "yellow";
+                } else {
+                    alarmCircle.style.backgroundColor = "green";
+                }
+
+                tdAlarm.appendChild(alarmCircle);
+                row.appendChild(tdAlarm);
+
 
                 tbody.appendChild(row);
             });
+
+
         }
 
 
@@ -698,16 +733,28 @@
                 chartDiv.classList.add("chart-container");
                 chartDiv.style.flex = "1";
                 chartDiv.style.minWidth = "300px";
-                chartDiv.style.height = "350px"; // 높이 지정
+                chartDiv.style.height = "400px"; // 높이 지정
                 chartDiv.style.marginBottom = "20px";
 
                 // 2. canvas 생성
                 const canvas = document.createElement("canvas");
                 canvas.id = `class_chart_${idx}`;
                 canvas.style.width = "100%";
-                canvas.style.height = "100%";
+                canvas.style.height = "85%";
                 chartDiv.appendChild(canvas);
+
+
+                // 3. True class 텍스트 추가
+                const trueClassText = document.createElement("div");
+                trueClassText.style.textAlign = "center";
+                trueClassText.style.marginTop = "5px";
+                trueClassText.style.fontWeight = "bold";
+                trueClassText.textContent = `True class: ${sample.true_class_name || "정보 없음"}`;
+                chartDiv.appendChild(trueClassText);
+
                 container.appendChild(chartDiv);
+
+
 
                 // 3. Chart.js 생성
                 const ctx = canvas.getContext('2d');
