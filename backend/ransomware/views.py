@@ -56,6 +56,7 @@ def get_samples(request):
 @csrf_exempt
 def train_models(request):
     """
+    POST 요청을 받아 run_training Generator의 결과를 StreamingHttpResponse로 실시간 전송
     POST 요청:
     {
         "sample_ids": [1, 3, 5]
@@ -81,21 +82,22 @@ def train_models(request):
 
     dataset_path = settings.BASE_DIR / "backend" / "ML" / "ransomwaredataset.csv"
 
-    try:
-        # ML 훈련 코드 실행
-        results = run_training(sample_ids=sample_ids, dataset_path=str(dataset_path))
+    training_generator = run_training(
+        sample_ids=sample_ids, 
+        dataset_path=str(dataset_path)
+    )
 
-        return JsonResponse({
-            "message": "Training completed",
-            "class_id": sample_ids,
-            "results": results
-        })
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JsonResponse({"error": f"모델 훈련 중 오류 발생: {type(e).__name__} - {str(e)}"}, status=500)
-
+    # StreamingHttpResponse를 사용하여 Generator의 출력을 스트리밍
+    response = StreamingHttpResponse(
+        training_generator,
+        # Server-Sent Events (SSE)의 MIME 타입 사용
+        content_type='text/event-stream' 
+    )
+    
+    # 브라우저가 Connection을 유지하도록 캐시 제어 헤더 추가 (권장)
+    response['Cache-Control'] = 'no-cache'
+    
+    return response
 
 # ============================================================
 # 3. Test API
