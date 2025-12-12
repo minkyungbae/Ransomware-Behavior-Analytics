@@ -202,6 +202,10 @@ def run_training(sample_ids=None, dataset_path="backend/ML/ransomwaredataset.csv
     # ---------------------------------------------------------
     # [데이터 병합 : 샘플별 상세 결과 생성]
     # ---------------------------------------------------------
+    sample_to_class = {}
+    if "class_name" in target_df.columns:
+        sample_to_class = dict(zip(target_df["sample_id"].astype(str), target_df["class_name"]))
+
     predictions_list = []
 
     class_names = {
@@ -247,6 +251,8 @@ def run_training(sample_ids=None, dataset_path="backend/ML/ransomwaredataset.csv
             # ⭐ 클래스 이름과 매핑
             class_probs = {class_names[j]: float(probs[j]) for j in range(10)}
 
+            true_class_name = sample_to_class.get(sample_id, "정보없음")
+
 
             
             predictions_list.append({
@@ -259,6 +265,7 @@ def run_training(sample_ids=None, dataset_path="backend/ML/ransomwaredataset.csv
             "lstm_probs": probs,  # [0.1, 0.05, ..., 0.8] (10개)
             "class_probs": class_probs,
             "true_class": int(y_target[i]),
+            "true_class_name": true_class_name,
             "histogram": {
                 "counts": counts.tolist(),
                 "bins": bins.tolist()
